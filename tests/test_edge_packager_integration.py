@@ -28,12 +28,20 @@ from certus.edge.quantize import EdgePackager  # noqa: E402
 
 
 def _tiny_model() -> nn.Module:
+    # Mirrors examples/colab_training_template.py's build_model() exactly.
+    # A more minimal architecture (fewer channels, no ReLU/MaxPool) was
+    # observed to crash TensorFlow Lite's native calibrator with a
+    # "Floating point exception" on Linux during INT8 calibration — this
+    # shape is the one actually verified to convert cleanly end to end.
     model = nn.Sequential(
-        nn.Conv2d(1, 4, kernel_size=3, padding=1),
+        nn.Conv2d(1, 8, kernel_size=3, padding=1),
+        nn.ReLU(),
+        nn.MaxPool2d(2),
+        nn.Conv2d(8, 16, kernel_size=3, padding=1),
         nn.ReLU(),
         nn.AdaptiveAvgPool2d(1),
         nn.Flatten(),
-        nn.Linear(4, 3),
+        nn.Linear(16, 10),
     )
     model.eval()
     return model
@@ -68,7 +76,7 @@ def test_to_tflite_int8_from_onnx_produces_genuine_int8_model(tmp_path):
     litert = pytest.importorskip("ai_edge_litert.interpreter")
     packager = EdgePackager(output_dir=tmp_path)
     onnx_path = packager.to_onnx(_tiny_model(), torch.randn(1, 1, 8, 8))
-    calibration_data = np.random.randn(10, 1, 8, 8).astype("float32")
+    calibration_data = np.random.randn(20, 1, 8, 8).astype("float32")
 
     tflite_path = packager.to_tflite_int8_from_onnx(onnx_path, calibration_data)
 
@@ -87,7 +95,7 @@ def test_full_pipeline_writes_manifest_with_all_three_artifacts(tmp_path):
 
     onnx_path = packager.to_onnx(_tiny_model(), sample)
     packager.quantize_onnx_int8(onnx_path)
-    packager.to_tflite_int8_from_onnx(onnx_path, np.random.randn(5, 1, 8, 8).astype("float32"))
+    packager.to_tflite_int8_from_onnx(onnx_path, np.random.randn(20, 1, 8, 8).astype("float32"))
     manifest = packager.write_manifest(run_id="test-run")
 
     assert set(manifest["artifacts"]) == {"onnx", "int8_onnx", "int8_tflite"}
