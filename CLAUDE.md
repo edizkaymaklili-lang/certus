@@ -142,6 +142,15 @@ resurfaces for a real user on Linux, the first things to try are pinning a diffe
 `tensorflow` version or filing upstream against `onnx2tf`/`tensorflow`'s TFLite calibrator —
 this has not been root-caused beyond "native crash, Linux x86_64 + this TF version".
 
+Investigated once (a temporary `workflow_dispatch`-only debug workflow, since removed):
+pinning `tensorflow==2.17.0` on the same Linux runner didn't reach the calibrator at all —
+it failed earlier with `ImportError: cannot import name 'runtime_version' from
+'google.protobuf'`, a `protobuf` version conflict between `tensorflow==2.17.0`'s own
+requirements and what `onnx2tf`'s other dependencies (`onnx`, `onnx-graphsurgeon`) resolve
+to. Bisecting further would mean pinning a fully consistent dependency set per TensorFlow
+version tried, not just TensorFlow alone — a bigger investigation than a quick version
+swap, and not pursued further given the workaround in place.
+
 ### Design invariants to preserve when extending this codebase
 
 - **Fail-closed everywhere**: an unregistered tool, an unmatched policy, or a missing
