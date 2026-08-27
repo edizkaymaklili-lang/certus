@@ -171,7 +171,11 @@ in-memory array. Two non-obvious gotchas discovered by actually running this end
      pulls in `onnx-graphsurgeon`, `sng4onnx`, `onnxsim`, `ai-edge-litert`, `psutil`,
      `tf-keras`, `onnxscript`, none of which it declares as hard requirements itself).
   A dedicated CI job (`edge-extra-test`) now installs the `edge` extra and runs the full
-  training template on every push/PR, so none of this can silently regress.
+  training template on every push/PR, so none of this can silently regress. That job
+  installs the **CPU-only torch wheel** (`--index-url https://download.pytorch.org/whl/cpu`)
+  before the `edge` extra — the default Linux wheel pulls in the full CUDA toolkit and
+  crashed the GitHub Actions runner with `Fatal Python error: Floating point exception`
+  (no GPU/driver present); this only surfaced in CI (Linux), not in local testing (macOS).
 
 ## Roadmap
 

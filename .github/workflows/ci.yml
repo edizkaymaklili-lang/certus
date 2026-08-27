@@ -65,6 +65,15 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Install PyTorch (CPU-only build)
+        # The default Linux torch wheel pulls in the full CUDA toolkit and has
+        # been observed to crash with "Fatal Python error: Floating point
+        # exception" on GPU-less CI runners. Installing the CPU-only build
+        # first (before the `edge` extra, which is satisfied by whatever
+        # torch version is already present) avoids both the multi-GB
+        # download and the crash.
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
       - name: Install package (core + edge + dev)
         run: pip install -e ".[edge,dev]"
 
