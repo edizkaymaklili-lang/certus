@@ -28,7 +28,22 @@ except ImportError as exc:  # pragma: no cover - import guard
 
 from certus.core.exceptions import CertusError
 from certus.core.models import ToolCall
+from certus.proxy.approval import ApprovalResponse, PendingApprovalStore
 from certus.proxy.middleware import CertusGuard
+
+
+class ApprovalDecisionRequest(BaseModel):
+    """Request body for ``POST /v1/approvals/{request_id}/decision``.
+
+    Posted by whatever received the out-of-band approval (a Slack
+    interactivity handler, a ticketing system webhook, or a human curling
+    this endpoint directly) to unblock a :class:`~certus.proxy.approval.WebhookApprovalCallback`
+    that is waiting on this ``request_id``.
+    """
+
+    approved: bool
+    approver: str | None = None
+    reason: str | None = None
 
 
 class ToolCallRequest(BaseModel):
@@ -52,7 +67,7 @@ class ToolCallResponse(BaseModel):
     reason: str | None = None
 
 
-def create_app(guard: CertusGuard) -> FastAPI:
+def create_app(guard: CertusGuard, approval_store: PendingApprovalStore | None = None) -> FastAPI:
     """Build a FastAPI app that proxies tool calls through ``guard``.
 
     Args:
@@ -61,6 +76,12 @@ def create_app(guard: CertusGuard) -> FastAPI:
             execute calls; leave tools unregistered to run in
             decision-only mode (the caller executes the call itself once
             ``ok`` is True).
+        approval_store: If ``guard``'s approval manager uses a
+            :class:`~certus.proxy.approval.WebhookApprovalCallback`, pass its
+            :class:`~certus.proxy.approval.PendingApprovalStore` here to expose
+            ``POST /v1/approvals/{request_id}/decision`` — the endpoint an
+            external channel (Slack, a webhook) calls to deliver a human's
+            decision and unblock the pending call.
     """
     app = FastAPI(
         title="Certus Guardrail Gateway",
@@ -92,6 +113,29 @@ def create_app(guard: CertusGuard) -> FastAPI:
             approved=decision.approved,
             reason=decision.reason,
         )
+
+    @app.post("/v1/approvals/{request_id}/decision")
+    def submit_approval_decision(
+        request_id: str, payload: ApprovalDecisionRequest
+    ) -> dict[str, str]:
+        if approval_store is None:
+            raise HTTPException(
+                status_code=404,
+                detail="This gateway has no approval_store configured; pass one to create_app().",
+            )
+        response = ApprovalResponse(
+            request_id=request_id,
+            approved=payload.approved,
+            approver=payload.approver,
+            reason=payload.reason,
+        )
+        if not approval_store.resolve(request_id, response):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No pending approval with id '{request_id}' "
+                "(already resolved, timed out, or never existed).",
+            )
+        return {"status": "recorded"}
 
     @app.get("/v1/healthz")
     def healthz() -> dict[str, str]:

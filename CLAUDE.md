@@ -22,13 +22,20 @@ Certus is two things sharing one package:
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"          # core + pytest/mypy/ruff
 pip install -e ".[proxy]"        # + FastAPI gateway (needed for certus.proxy.gateway)
-pip install -e ".[edge]"         # + torch/onnx/onnxruntime/tensorflow
+
+# The `edge` extra (torch/onnx/onnxruntime/tensorflow/onnx2tf) is heavy and its
+# wheel availability can lag behind the newest CPython — use a dedicated
+# venv pinned to a well-supported interpreter (3.11) rather than mixing it
+# into the main dev venv:
+python3.11 -m venv .venv-edge && source .venv-edge/bin/activate
+pip install -e ".[edge,dev]"
 
 # Test
-pytest                                              # full suite
+pytest                                              # full suite (edge integration tests auto-skip without the `edge` extra)
 pytest tests/test_policy.py                         # one file
 pytest tests/test_policy.py::test_allowlisted_tool_is_allowed -v   # one test
 pytest -k "approval"                                # by keyword
+pytest tests/test_edge_packager_integration.py -v   # real ONNX/TFLite conversion (.venv-edge only)
 
 # Lint / type-check (both run in CI, both must be clean before committing)
 ruff check .          # add --fix for auto-fixable issues
@@ -85,6 +92,17 @@ it defaults to `auto_deny_callback` (fail-closed) if no channel is configured, s
 `critical_tools` policy match with no approval manager wired raises `ApprovalRequiredError`
 rather than silently proceeding.
 
+`WebhookApprovalCallback` is the real out-of-band channel (Slack or any webhook): it
+registers the pending request in a `PendingApprovalStore`, fires a `notify` callable
+(e.g. `slack_webhook_notifier(url)`), and *blocks the calling thread* up to `timeout`
+seconds waiting for something to call `store.resolve(request_id, response)` — normally
+the gateway's `POST /v1/approvals/{request_id}/decision` route (pass the same `store` to
+`create_app(guard, approval_store=store)`). It fails closed on both a notify error and a
+timeout. Because FastAPI runs sync `def` route handlers in a thread pool, blocking inside
+`submit_tool_call` this way does not deadlock the gateway — see `test_gateway.py::test_approval_decision_endpoint_unblocks_pending_call`
+for the concurrency pattern (call the tool in a background thread, resolve the pending
+request from the test's main thread, join).
+
 ### Edge module has an independent data contract
 
 `certus.edge.colab_bridge` defines the `TrainingConfig`/`TrainingMetrics` Pydantic models
@@ -93,6 +111,21 @@ there is no shared runtime, just JSON files. `suggest_next_config` is a determin
 decision tree (overfit / plateau / failed-run detection), mirroring the same
 "no black-box decisions" principle as the guardrail side; it's meant to be called and
 overridden, not treated as authoritative.
+
+`EdgePackager.to_tflite_int8_from_onnx` converts ONNX straight to a fully INT8-quantized
+TFLite model via `onnx2tf`, calibrated on a real (or realistic) representative dataset saved
+to a temporary `.npy` file — `onnx2tf`'s calibration API takes a *file path*, not an
+in-memory array. Two non-obvious gotchas discovered by actually running this end to end
+(both now fixed, but worth knowing if this code changes):
+- `_require()` must use `importlib.import_module`, not the `__import__` builtin directly —
+  `__import__("onnxruntime.quantization")` returns the top-level `onnxruntime` package, not
+  the `quantization` submodule.
+- `EdgePackager.to_onnx` defaults to `dynamo=False` (the legacy TorchScript-based ONNX
+  exporter). PyTorch's newer `torch.export`-based exporter (default in `torch.onnx.export`
+  since 2.9) has been observed to emit `ReduceMean`/`Reshape` graphs for pooling layers that
+  fail ONNX shape inference inside `quantize_onnx_int8`/`to_tflite_int8_from_onnx` with
+  `InferenceError: Inferred shape and existing shape differ`. Only flip `dynamo=True` after
+  verifying the specific model converts cleanly end to end.
 
 ### Design invariants to preserve when extending this codebase
 
@@ -112,24 +145,42 @@ overridden, not treated as authoritative.
   (`pyproject.toml`, src-layout), the schema/policy validator engine, the execution
   interceptor + sandbox + approval + FastAPI gateway, and the Colab-Claude bridge with a
   runnable training template. Verified with 38 passing pytest cases, clean `ruff`, and
-  clean strict `mypy` — see commit `0ded709`.
-- Added `LICENSE` (Apache-2.0, matching `pyproject.toml`'s declared classifier) and
-  `.github/workflows/ci.yml` (ruff + mypy + pytest on 3.11/3.12, plus a gateway import
-  smoke test) — commit `0c7689e`.
-- Local git repo initialized; not yet pushed to GitHub. `gh` CLI installed via Homebrew;
-  device-login flow was started but the repo's public/private visibility and the actual
-  `gh repo create` + push are still pending a decision from the project owner.
+  clean strict `mypy` — commit `0ded709`.
+- Added `LICENSE` (Apache-2.0) and `.github/workflows/ci.yml` (ruff + mypy + pytest on
+  3.11/3.12, plus a gateway import smoke test) — commit `0c7689e`.
+- Added `CLAUDE.md` — commit `3af919a`.
+- Pushed to GitHub as a **public** repo: https://github.com/edizkaymaklili-lang/certus
+  (decision: monetization plans — open-core, hosted gateway, enterprise support — all
+  depend on adoption, which a private repo can't build). Added `.github/FUNDING.yml`
+  wiring the Sponsor button to GitHub Sponsors (goes live once that application, a manual
+  step for the repo owner, is approved).
+- **Gaps closed** (all three verified with real, non-mocked runs, not just unit tests):
+  1. Real human approval channel: `WebhookApprovalCallback` + `PendingApprovalStore` +
+     the gateway's `POST /v1/approvals/{request_id}/decision` endpoint, tested against an
+     actual local HTTP server (`tests/test_approval_webhook.py`) and a real threaded
+     request/resolve/unblock cycle through the FastAPI gateway (`tests/test_gateway.py`).
+  2. Real dataset: `examples/colab_training_template.py` now trains on
+     `sklearn.datasets.load_digits` (real handwritten digits, bundled — no network
+     download) instead of random tensors.
+  3. Real ONNX→TFLite conversion: `EdgePackager.to_tflite_int8_from_onnx` via `onnx2tf`,
+     producing a genuinely INT8-quantized model (verified with the `ai_edge_litert`
+     interpreter — int8 input tensor). Getting this working end to end surfaced and fixed
+     two real bugs — see the two gotchas under "Edge module" above (`_require`'s
+     `__import__` vs `importlib.import_module`, and the dynamo exporter's shape-inference
+     failure) — plus the full `edge` extra dependency list in `pyproject.toml` (onnx2tf
+     pulls in `onnx-graphsurgeon`, `sng4onnx`, `onnxsim`, `ai-edge-litert`, `psutil`,
+     `tf-keras`, `onnxscript`, none of which it declares as hard requirements itself).
+  A dedicated CI job (`edge-extra-test`) now installs the `edge` extra and runs the full
+  training template on every push/PR, so none of this can silently regress.
 
 ## Roadmap
 
-**Near-term engineering (natural continuation of Phase 1):**
-- Wire a real approval channel beyond the CLI/auto-deny built-ins (Slack, a webhook, a
-  ticketing system) as a concrete `ApprovalCallback` implementation.
-- Swap the Colab template's synthetic tensors for a real dataset (e.g. `torchvision.MNIST`)
-  and add the ONNX→TFLite conversion step (`onnx2tf` or equivalent) currently left as a
-  documented gap in `examples/colab_training_template.py`.
-- Push the repo to GitHub once visibility (public/private) is decided; CI is already
-  configured to run on push/PR.
+**Near-term engineering:**
+- GitHub Sponsors: the repo side (`FUNDING.yml`) is ready; the actual application at
+  github.com/sponsors is a manual, off-platform step for the repo owner.
+- Consider adding a Slack *interactivity* handler example (a small server that turns a
+  Slack button click into a call to the gateway's approval-decision endpoint) — right now
+  `slack_webhook_notifier` only covers the outbound notification half.
 
 **Product direction (from monetization discussion, not yet started):**
 Certus is positioned as an open-core B2B infra project — the plan is to keep

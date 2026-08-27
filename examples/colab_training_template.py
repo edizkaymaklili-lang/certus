@@ -2,9 +2,13 @@
 
 Intended to run as a Colab cell (or any machine with the `edge` extra
 installed). It reads a `config.json` written by the orchestrating agent,
-trains a small PyTorch model, writes a `metrics.json` history back, and
-packages the trained model into INT8 ONNX / TFLite artifacts plus a
-`manifest.json` describing them.
+trains a small PyTorch model on the real `sklearn.datasets.load_digits`
+dataset (1,797 real handwritten-digit images, bundled with scikit-learn —
+no network download required, unlike `torchvision.datasets.MNIST`), writes
+a `metrics.json` history back, and packages the trained model into INT8
+ONNX and a genuinely fully-INT8-quantized TFLite model (via `onnx2tf`,
+calibrated on real held-out validation images) plus a `manifest.json`
+describing every artifact produced.
 
 Install the extra this script needs:
 
@@ -33,7 +37,7 @@ from certus.edge.quantize import EdgePackager
 
 
 def build_model(config: TrainingConfig):
-    """A minimal CNN sized for edge deployment (MNIST-shaped input)."""
+    """A minimal CNN sized for edge deployment (8x8 grayscale digit input)."""
     import torch.nn as nn
 
     return nn.Sequential(
@@ -60,27 +64,38 @@ def build_optimizer(config: TrainingConfig, model):
     return optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
 
-def synthetic_dataloaders(config: TrainingConfig):
-    """Synthetic MNIST-shaped data so this template runs with no external dataset.
+def real_digits_dataloaders(config: TrainingConfig):
+    """Load the real, bundled `sklearn.datasets.load_digits` dataset.
 
-    Swap this out for a real `torchvision.datasets.MNIST` (or your own data)
-    in an actual Colab run — this exists purely so the template is
-    self-contained and fast to smoke-test.
+    1,797 real 8x8 grayscale handwritten-digit images (10 classes), shipped
+    with scikit-learn — genuine data with no network download required,
+    unlike `torchvision.datasets.MNIST`. Pixel values (0-16) are scaled to
+    [0, 1]. Returns train/val DataLoaders plus the raw validation tensor,
+    which doubles as real calibration data for INT8 TFLite export.
     """
     import torch
+    from sklearn.datasets import load_digits
+    from sklearn.model_selection import train_test_split
     from torch.utils.data import DataLoader, TensorDataset
 
-    generator = torch.Generator().manual_seed(0)
-    x_train = torch.randn(512, 1, 28, 28, generator=generator)
-    y_train = torch.randint(0, 10, (512,), generator=generator)
-    x_val = torch.randn(128, 1, 28, 28, generator=generator)
-    y_val = torch.randint(0, 10, (128,), generator=generator)
+    images, labels = load_digits(return_X_y=True)
+    x_train, x_val, y_train, y_val = train_test_split(
+        images, labels, test_size=0.2, random_state=0, stratify=labels
+    )
+
+    def to_tensor(x, y):
+        x_t = torch.tensor(x, dtype=torch.float32).reshape(-1, 1, 8, 8) / 16.0
+        y_t = torch.tensor(y, dtype=torch.long)
+        return x_t, y_t
+
+    x_train_t, y_train_t = to_tensor(x_train, y_train)
+    x_val_t, y_val_t = to_tensor(x_val, y_val)
 
     train_loader = DataLoader(
-        TensorDataset(x_train, y_train), batch_size=config.batch_size, shuffle=True
+        TensorDataset(x_train_t, y_train_t), batch_size=config.batch_size, shuffle=True
     )
-    val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=config.batch_size)
-    return train_loader, val_loader
+    val_loader = DataLoader(TensorDataset(x_val_t, y_val_t), batch_size=config.batch_size)
+    return train_loader, val_loader, x_val_t
 
 
 def train(config: TrainingConfig) -> tuple:
@@ -90,7 +105,7 @@ def train(config: TrainingConfig) -> tuple:
     model = build_model(config)
     optimizer = build_optimizer(config, model)
     criterion = nn.CrossEntropyLoss()
-    train_loader, val_loader = synthetic_dataloaders(config)
+    train_loader, val_loader, calibration_data = real_digits_dataloaders(config)
 
     history: list[EpochMetric] = []
     for epoch in range(1, config.epochs + 1):
@@ -130,17 +145,18 @@ def train(config: TrainingConfig) -> tuple:
             f"val_acc={metric.val_accuracy:.4f}"
         )
 
-    return model, history
+    return model, history, calibration_data
 
 
-def package_for_edge(config: TrainingConfig, model, output_dir: Path) -> dict:
-    import torch
-
+def package_for_edge(config: TrainingConfig, model, calibration_data, output_dir: Path) -> dict:
     packager = EdgePackager(output_dir=output_dir)
-    sample_input = torch.randn(1, 1, 28, 28)
+    sample_input = calibration_data[:1]  # one real, normalized validation image: (1, 1, 8, 8)
 
     exported_formats = []
-    onnx_path = packager.to_onnx(model, sample_input, dynamic_axes={"input": {0: "batch"}})
+    # Fixed batch size (1): edge/embedded deployments run one inference at a
+    # time, and `dynamic_axes` is unreliable with torch's dynamo-based ONNX
+    # exporter (see the caveat on EdgePackager.to_onnx) — a fixed shape sidesteps it.
+    onnx_path = packager.to_onnx(model, sample_input)
     exported_formats.append("onnx")
 
     if "int8_onnx" in config.target_formats:
@@ -148,15 +164,11 @@ def package_for_edge(config: TrainingConfig, model, output_dir: Path) -> dict:
         exported_formats.append("int8_onnx")
 
     if "int8_tflite" in config.target_formats:
-        try:
-            # Requires an ONNX->TF conversion step (e.g. `onnx2tf`) not bundled
-            # here; this call is expected to raise on a plain `edge` install
-            # until a SavedModel directory is produced by that extra tool.
-            saved_model_dir = output_dir / "saved_model"
-            packager.to_tflite_int8(saved_model_dir)
-            exported_formats.append("int8_tflite")
-        except Exception as exc:  # pragma: no cover - depends on external conversion tooling
-            print(f"Skipping TFLite export ({exc}). Run `onnx2tf` on {onnx_path} first.")
+        # Calibrate on real held-out validation images (not random noise) so
+        # the resulting INT8 quantization ranges actually reflect the data
+        # this model will see in production.
+        packager.to_tflite_int8_from_onnx(onnx_path, calibration_data.numpy())
+        exported_formats.append("int8_tflite")
 
     return packager.write_manifest(run_id=config.run_id), exported_formats
 
@@ -176,8 +188,8 @@ def main() -> None:
     print(f"Loaded config for run '{config.run_id}': {config.model_dump()}")
 
     try:
-        model, history = train(config)
-        manifest, exported_formats = package_for_edge(config, model, output_dir)
+        model, history, calibration_data = train(config)
+        manifest, exported_formats = package_for_edge(config, model, calibration_data, output_dir)
         metrics = TrainingMetrics(
             run_id=config.run_id,
             history=history,

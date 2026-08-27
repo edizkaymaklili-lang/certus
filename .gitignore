@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 .venv/
+.venv-edge/
 venv/
 .env
 .env.*
@@ -34,5 +35,6 @@ quarantine/
 *.pth
 checkpoints/
 runs/
+artifacts/
 metrics.json
 !examples/**/metrics.json

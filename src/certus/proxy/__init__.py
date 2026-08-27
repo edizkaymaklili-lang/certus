@@ -5,7 +5,15 @@
 ``import certus`` never pulls in FastAPI.
 """
 
-from certus.proxy.approval import ApprovalManager, ApprovalRequest, ApprovalResponse
+from certus.proxy.approval import (
+    ApprovalManager,
+    ApprovalRequest,
+    ApprovalResponse,
+    PendingApprovalStore,
+    WebhookApprovalCallback,
+    generic_json_webhook_notifier,
+    slack_webhook_notifier,
+)
 from certus.proxy.middleware import AuditJournal, CertusGuard, GuardDecision
 from certus.proxy.sandbox import DbTransaction, FileSandbox, SandboxJournal, StagedFileOperation
 
@@ -18,6 +26,10 @@ __all__ = [
     "DbTransaction",
     "FileSandbox",
     "GuardDecision",
+    "PendingApprovalStore",
     "SandboxJournal",
     "StagedFileOperation",
+    "WebhookApprovalCallback",
+    "generic_json_webhook_notifier",
+    "slack_webhook_notifier",
 ]

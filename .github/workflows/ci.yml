@@ -52,3 +52,31 @@ jobs:
 
       - name: Import gateway module
         run: python -c "from certus.proxy.gateway import create_app; from certus.proxy.middleware import CertusGuard; create_app(CertusGuard())"
+
+  edge-extra-test:
+    name: Edge pipeline integration test (torch/onnx/onnx2tf/tensorflow)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package (core + edge + dev)
+        run: pip install -e ".[edge,dev]"
+
+      - name: Run EdgePackager integration tests (real ONNX/TFLite conversion)
+        run: pytest tests/test_edge_packager_integration.py tests/test_edge_quantize.py -v
+
+      - name: Run the full Colab training template end to end
+        run: |
+          python examples/colab_training_template.py \
+            --config examples/config.json \
+            --output-dir /tmp/certus-ci-run
+          test -s /tmp/certus-ci-run/model.onnx
+          test -s /tmp/certus-ci-run/model.int8.onnx
+          test -s /tmp/certus-ci-run/model.int8.tflite
+          test -s /tmp/certus-ci-run/manifest.json

@@ -46,8 +46,24 @@ edge = [
     "torch>=2.2",
     "onnx>=1.15",
     "onnxruntime>=1.17",
+    # torch's default ONNX exporter (torch>=2.5) is dynamo-based and requires
+    # onnxscript even for basic torch.onnx.export() calls.
+    "onnxscript>=0.1",
     "tensorflow>=2.16; platform_machine != 'arm64' or sys_platform != 'darwin'",
     "tensorflow-macos>=2.16; platform_machine == 'arm64' and sys_platform == 'darwin'",
+    # onnx2tf and its runtime dependencies power EdgePackager.to_tflite_int8_from_onnx
+    # (direct ONNX -> TFLite conversion). onnx2tf itself declares no hard version
+    # pins on these, so they're listed explicitly here.
+    "onnx2tf>=1.17",
+    "onnx-graphsurgeon>=0.5",
+    "sng4onnx>=1.0",
+    "onnxsim>=0.4",
+    "ai-edge-litert>=1.0",
+    "psutil>=5.9",
+    "tf-keras>=2.16",
+    # scikit-learn powers the bundled real dataset (load_digits) in
+    # examples/colab_training_template.py.
+    "scikit-learn>=1.4",
 ]
 dev = [
     "pytest>=8.0",
@@ -83,7 +99,15 @@ files = ["src/certus"]
 # and `edge` extras; don't fail type-checking when they (or their stubs)
 # aren't installed in the current environment.
 [[tool.mypy.overrides]]
-module = ["fastapi.*", "torch.*", "onnx.*", "onnxruntime.*", "tensorflow.*"]
+module = [
+    "fastapi.*",
+    "torch.*",
+    "onnx.*",
+    "onnxruntime.*",
+    "tensorflow.*",
+    "onnx2tf.*",
+    "numpy.*",
+]
 ignore_missing_imports = true
 
 # certus.proxy.gateway's route decorators come from FastAPI, which this
