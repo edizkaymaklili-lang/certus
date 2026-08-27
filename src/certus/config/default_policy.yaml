@@ -1,0 +1,89 @@
+# Certus default policy.
+#
+# This ships as a safe, restrictive starting point: fail-closed by default,
+# with explicit denylists for common destructive/exfiltration patterns and
+# an explicit critical-tools list requiring human approval. Copy this file
+# and adapt it — do not edit the packaged copy in place.
+
+version: 1
+
+# Anything not matched by a rule below is denied. Flip to "allow" only if
+# you fully trust every tool an agent can reach and rely solely on the
+# denylist rules for protection (not recommended for production).
+default_action: deny
+default_risk: low
+
+# Tools explicitly known to be safe/read-only. Only consulted if a tool
+# was not already classified by a denylist or critical-tools rule above it.
+allowlist:
+  - read_file
+  - list_directory
+  - search_web
+  - get_weather
+  - calculate
+
+# Tools that are never permitted, regardless of arguments.
+denylist_tools:
+  - id: deny-raw-shell
+    tools: ["exec_shell", "run_command", "eval_code", "exec_python"]
+    reason: "Raw code/shell execution is not permitted through this policy."
+
+# Argument-value patterns that block a call regardless of which tool issued it.
+denylist_patterns:
+  - id: deny-destructive-shell
+    fields: ["*"]
+    pattern: '(?i)\brm\s+-rf\b|\bmkfs\b|:\(\)\{\s*:\|:&\s*\};:'
+    reason: "Destructive or fork-bomb shell pattern detected in arguments."
+
+  - id: deny-destructive-sql
+    fields: ["*"]
+    pattern: '(?i)\bDROP\s+TABLE\b|\bTRUNCATE\s+TABLE\b|\bDELETE\s+FROM\b[^;]*\bWHERE\s+1\s*=\s*1\b'
+    reason: "Destructive, unscoped SQL statement detected in arguments."
+
+  - id: deny-secret-access
+    fields: ["*"]
+    pattern: '(?i)(\.env\b|/etc/passwd|/etc/shadow|id_rsa|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)'
+    reason: "Attempted access to a credentials/secrets path or key material."
+
+  - id: deny-ssrf-internal-network
+    fields: ["*"]
+    pattern: '(?i)\b(localhost|127\.0\.0\.1|0\.0\.0\.0|169\.254\.169\.254|\[::1\])\b'
+    reason: "Blocked internal/loopback/cloud-metadata address (possible SSRF)."
+
+  - id: deny-prompt-injection-marker
+    fields: ["*"]
+    pattern: '(?i)ignore (all )?(previous|prior|above) instructions|you are now (in )?(dan|developer) mode'
+    reason: "Argument content matches a known prompt-injection marker."
+
+# Tools that are allowed but must be routed through human approval /
+# sandboxed execution before they take effect for real.
+critical_tools:
+  - id: critical-file-delete
+    tools: ["delete_file", "delete_directory"]
+    risk_level: high
+    requires_approval: true
+    reason: "Filesystem deletion requires human approval and is sandboxed."
+
+  - id: critical-file-write
+    tools: ["write_file", "overwrite_file"]
+    risk_level: medium
+    requires_approval: true
+    reason: "Filesystem write requires human approval and is sandboxed."
+
+  - id: critical-db-write
+    tools: ["db_execute", "db_write", "db_migrate"]
+    risk_level: high
+    requires_approval: true
+    reason: "Database mutation requires human approval and runs inside a transaction."
+
+  - id: critical-payment
+    tools: ["charge_payment", "issue_refund", "transfer_funds"]
+    risk_level: critical
+    requires_approval: true
+    reason: "Financial transaction requires human approval."
+
+  - id: critical-outbound-comms
+    tools: ["send_email", "send_message", "post_webhook"]
+    risk_level: medium
+    requires_approval: true
+    reason: "Outbound communication requires human approval to prevent data exfiltration."

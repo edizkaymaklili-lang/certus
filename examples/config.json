@@ -1,0 +1,12 @@
+{
+  "run_id": "run-001",
+  "model_name": "edge-tinycnn",
+  "learning_rate": 0.001,
+  "batch_size": 64,
+  "epochs": 5,
+  "optimizer": "adamw",
+  "weight_decay": 0.0001,
+  "dropout": 0.1,
+  "target_formats": ["int8_onnx", "int8_tflite"],
+  "notes": "Initial baseline run for the Claude-Colab bridge demo."
+}

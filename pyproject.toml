@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "certus-ai"
+version = "0.1.0"
+description = "Deterministic guardrail layer and edge-AI MLOps pipeline for autonomous AI agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Certus Contributors" }]
+keywords = [
+    "ai-agents",
+    "llm",
+    "guardrails",
+    "security",
+    "prompt-injection",
+    "mlops",
+    "edge-ai",
+    "quantization",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "pydantic>=2.6,<3",
+    "jsonschema>=4.21,<5",
+    "PyYAML>=6.0,<7",
+    "typing-extensions>=4.9; python_version < '3.12'",
+]
+
+[project.optional-dependencies]
+proxy = [
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.27,<1",
+]
+edge = [
+    "torch>=2.2",
+    "onnx>=1.15",
+    "onnxruntime>=1.17",
+    "tensorflow>=2.16; platform_machine != 'arm64' or sys_platform != 'darwin'",
+    "tensorflow-macos>=2.16; platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "mypy>=1.9",
+    "ruff>=0.4",
+    "httpx>=0.27",
+    "types-PyYAML>=6.0",
+    "types-jsonschema>=4.21",
+]
+
+[project.urls]
+Homepage = "https://github.com/certus-ai/certus"
+Documentation = "https://github.com/certus-ai/certus#readme"
+Issues = "https://github.com/certus-ai/certus/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/certus"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/certus/config/default_policy.yaml" = "certus/config/default_policy.yaml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/certus"]
+
+# fastapi/torch/onnx/tensorflow are only pulled in by the optional `proxy`
+# and `edge` extras; don't fail type-checking when they (or their stubs)
+# aren't installed in the current environment.
+[[tool.mypy.overrides]]
+module = ["fastapi.*", "torch.*", "onnx.*", "onnxruntime.*", "tensorflow.*"]
+ignore_missing_imports = true
+
+# certus.proxy.gateway's route decorators come from FastAPI, which this
+# strict config treats as untyped (see override above) whenever the `proxy`
+# extra isn't installed; relax just that one check for just this module.
+[[tool.mypy.overrides]]
+module = "certus.proxy.gateway"
+disallow_untyped_decorators = false
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

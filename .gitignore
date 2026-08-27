@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.env.*
+
+# test / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# IDE
+.vscode/
+.idea/
+.claude/settings.local.json
+
+# Certus runtime artifacts
+.certus/
+*.certus-journal.jsonl
+quarantine/
+
+# Edge AI / Colab artifacts
+*.onnx
+*.tflite
+*.pt
+*.pth
+checkpoints/
+runs/
+metrics.json
+!examples/**/metrics.json
