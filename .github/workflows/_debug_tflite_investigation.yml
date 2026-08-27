@@ -1,0 +1,41 @@
+name: "[debug] TFLite calibrator crash investigation"
+
+# Temporary, manual-only workflow to bisect whether the SIGFPE crash in
+# TensorFlow Lite's native calibrator (documented in CLAUDE.md's "Known
+# platform limitation" section) is specific to tensorflow==2.21.0. Not
+# part of the regular CI suite — delete this file once the investigation
+# is done, regardless of outcome.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tensorflow_version:
+        description: "tensorflow version to pin before installing the edge extra"
+        required: true
+        default: "2.21.0"
+
+jobs:
+  try-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install PyTorch (CPU-only build)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install pinned TensorFlow version
+        run: pip install "tensorflow==${{ inputs.tensorflow_version }}"
+
+      - name: Install package (core + edge + dev)
+        run: pip install -e ".[edge,dev]"
+
+      - name: Report resolved versions
+        run: pip show tensorflow onnx2tf ai-edge-litert | grep -E "^(Name|Version)"
+
+      - name: Run the previously-crashing TFLite conversion test
+        run: pytest tests/test_edge_packager_integration.py -v -k tflite
