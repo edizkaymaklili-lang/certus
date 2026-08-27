@@ -87,7 +87,27 @@ def test_to_tflite_int8_from_onnx_produces_genuine_int8_model(tmp_path):
     assert input_detail["dtype"] == np.int8
 
 
-def test_full_pipeline_writes_manifest_with_all_three_artifacts(tmp_path):
+def test_pipeline_writes_manifest_for_onnx_artifacts(tmp_path):
+    """The onnx + int8_onnx half of the pipeline, without the tflite step.
+
+    Kept as its own (non-"tflite"-named) test so it still runs in CI
+    environments that exclude the onnx2tf/TFLite tests — see the note in
+    `test_to_tflite_int8_from_onnx_produces_genuine_int8_model` above.
+    """
+    pytest.importorskip("onnx")
+    packager = EdgePackager(output_dir=tmp_path)
+    sample = torch.randn(1, 1, 8, 8)
+
+    onnx_path = packager.to_onnx(_tiny_model(), sample)
+    packager.quantize_onnx_int8(onnx_path)
+    manifest = packager.write_manifest(run_id="test-run")
+
+    assert set(manifest["artifacts"]) == {"onnx", "int8_onnx"}
+    for artifact in manifest["artifacts"].values():
+        assert artifact["size_bytes"] > 0
+
+
+def test_full_pipeline_with_tflite_writes_manifest_with_all_three_artifacts(tmp_path):
     pytest.importorskip("onnx")
     np = pytest.importorskip("numpy")
     packager = EdgePackager(output_dir=tmp_path)

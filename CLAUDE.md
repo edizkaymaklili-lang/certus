@@ -127,6 +127,21 @@ in-memory array. Two non-obvious gotchas discovered by actually running this end
   `InferenceError: Inferred shape and existing shape differ`. Only flip `dynamo=True` after
   verifying the specific model converts cleanly end to end.
 
+**Known platform limitation** — `to_tflite_int8_from_onnx` (and anything that calls it,
+including `examples/colab_training_template.py` with `int8_tflite` in `target_formats`) is
+verified working on macOS (Apple Silicon) but **crashes the Python process outright**
+(`Fatal Python error: Floating point exception`, SIGFPE, inside TensorFlow Lite's native
+calibrator — `tensorflow/lite/python/optimize/calibrator.py:_feed_tensors`) on the GitHub
+Actions `ubuntu-latest` runner with `tensorflow==2.21.0`. This reproduces regardless of
+model architecture or calibration data, and is a crash in a compiled C++ extension — not
+something `try`/`except` can catch, and not a bug in Certus's Python code (the identical
+call sequence works correctly on macOS). CI works around it: `edge-extra-test` runs
+`pytest -k "not tflite"` and trains with `examples/config.ci.json` (`target_formats:
+["int8_onnx"]` only, no `int8_tflite`) instead of the real `examples/config.json`. If this
+resurfaces for a real user on Linux, the first things to try are pinning a different
+`tensorflow` version or filing upstream against `onnx2tf`/`tensorflow`'s TFLite calibrator —
+this has not been root-caused beyond "native crash, Linux x86_64 + this TF version".
+
 ### Design invariants to preserve when extending this codebase
 
 - **Fail-closed everywhere**: an unregistered tool, an unmatched policy, or a missing
@@ -163,19 +178,22 @@ in-memory array. Two non-obvious gotchas discovered by actually running this end
      `sklearn.datasets.load_digits` (real handwritten digits, bundled — no network
      download) instead of random tensors.
   3. Real ONNX→TFLite conversion: `EdgePackager.to_tflite_int8_from_onnx` via `onnx2tf`,
-     producing a genuinely INT8-quantized model (verified with the `ai_edge_litert`
-     interpreter — int8 input tensor). Getting this working end to end surfaced and fixed
-     two real bugs — see the two gotchas under "Edge module" above (`_require`'s
-     `__import__` vs `importlib.import_module`, and the dynamo exporter's shape-inference
-     failure) — plus the full `edge` extra dependency list in `pyproject.toml` (onnx2tf
-     pulls in `onnx-graphsurgeon`, `sng4onnx`, `onnxsim`, `ai-edge-litert`, `psutil`,
-     `tf-keras`, `onnxscript`, none of which it declares as hard requirements itself).
-  A dedicated CI job (`edge-extra-test`) now installs the `edge` extra and runs the full
-  training template on every push/PR, so none of this can silently regress. That job
-  installs the **CPU-only torch wheel** (`--index-url https://download.pytorch.org/whl/cpu`)
-  before the `edge` extra — the default Linux wheel pulls in the full CUDA toolkit and
-  crashed the GitHub Actions runner with `Fatal Python error: Floating point exception`
-  (no GPU/driver present); this only surfaced in CI (Linux), not in local testing (macOS).
+     producing a genuinely INT8-quantized model (verified on macOS with the
+     `ai_edge_litert` interpreter — int8 input tensor). Getting this working end to end
+     surfaced and fixed two real bugs — see the two gotchas under "Edge module" above
+     (`_require`'s `__import__` vs `importlib.import_module`, and the dynamo exporter's
+     shape-inference failure) — plus the full `edge` extra dependency list in
+     `pyproject.toml` (onnx2tf pulls in `onnx-graphsurgeon`, `sng4onnx`, `onnxsim`,
+     `ai-edge-litert`, `psutil`, `tf-keras`, `onnxscript`, none of which it declares as hard
+     requirements itself). It also surfaced a genuine **Linux-only native crash** in
+     TensorFlow Lite's calibrator that is not yet root-caused — see "Known platform
+     limitation" above; CI works around it rather than silently hiding it.
+  A dedicated CI job (`edge-extra-test`) installs the `edge` extra and runs the training
+  template (ONNX formats only, per the platform limitation above) on every push/PR. That
+  job also installs the **CPU-only torch wheel**
+  (`--index-url https://download.pytorch.org/whl/cpu`) before the `edge` extra — the
+  default Linux wheel pulls in the full CUDA toolkit (~1.3GB) unnecessarily on a GPU-less
+  runner.
 
 ## Roadmap
 

@@ -1,0 +1,12 @@
+{
+  "run_id": "ci-run",
+  "model_name": "edge-tinycnn",
+  "learning_rate": 0.001,
+  "batch_size": 64,
+  "epochs": 2,
+  "optimizer": "adamw",
+  "weight_decay": 0.0001,
+  "dropout": 0.1,
+  "target_formats": ["int8_onnx"],
+  "notes": "CI-only config: skips int8_tflite. See the 'Known platform limitation' note in CLAUDE.md/README — TensorFlow Lite's native calibrator crashes with SIGFPE during INT8 calibration on the GitHub Actions ubuntu-latest runner (tensorflow==2.21.0), while working correctly on macOS. examples/config.json (the real example) is unaffected and keeps int8_tflite."
+}

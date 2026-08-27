@@ -203,6 +203,8 @@ pip install -e ".[edge,dev]"
 pytest tests/test_edge_packager_integration.py -v   # real ONNX/TFLite conversion, not mocked
 ```
 
+> **Known platform limitation:** the TFLite conversion (`to_tflite_int8_from_onnx`, and the `int8_tflite` target format) is verified working on macOS but crashes the process (`Fatal Python error: Floating point exception`) inside TensorFlow Lite's native calibrator on the GitHub Actions `ubuntu-latest` runner with `tensorflow==2.21.0`, independent of model or data. Not yet root-caused upstream. CI works around it — see `edge-extra-test` in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and the note in [CLAUDE.md](CLAUDE.md).
+
 ## Design principles
 
 - **Zero black-box dependencies.** Security decisions are deterministic rule matches (exact names, compiled regex, JSON Schema), never model scores.
